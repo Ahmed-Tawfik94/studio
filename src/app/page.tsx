@@ -3,32 +3,32 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  ChevronDown, ChevronRight, BookOpen, PlayCircle, Code2 as CodeIcon,
-  ArrowLeft, ArrowRight, Lightbulb, Loader2, AlertCircle, RotateCcw, GraduationCap, Star
+  ChevronDown, ChevronRight, BookOpen, PlayCircle, Code2 as CodeIcon, MonitorPlay, Film, Terminal,
+  ArrowLeft, ArrowRight, Lightbulb, Loader2, AlertCircle, RotateCcw, GraduationCap, Star, CheckCircle2, XCircle
 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { Textarea } from "@/components/ui/textarea";
 import { rewriteQuizQuestion, RewriteQuizQuestionInput } from '@/ai/flows/rewrite-quiz-question';
-import courseDataFromFile from '@/data/courseData'; // Renamed import
+import courseDataFromFile from '@/data/courseData';
 
 // --- Type Definitions based on courseData.js ---
 
 interface QuizAnswer {
   text: string;
-  value: number; // Value of the answer, used to check against QuizQuestion.answer
+  value: number;
 }
 
 interface QuizQuestion {
   text: string;
-  type: 'option' | 'blank' | string; // 'option' for multiple choice, 'blank' for fill-in-the-blank
+  type: 'option' | 'blank' | 'blank_options' | string;
   answers: QuizAnswer[];
-  answer: string; // For 'option', this is the stringified 'value' of the correct answer. For 'blank', it's the expected text.
+  answer: string; // For 'option'/'blank_options', this is stringified 'value'. For 'blank' (free text), it's the text.
   hint?: string;
   success?: string;
   failed?: string;
-  // multi_choice is part of metadata in courseData, not directly in question
 }
 
 interface BaseTaskMetadata {
@@ -38,22 +38,21 @@ interface BaseTaskMetadata {
   hints?: Array<{ cost?: number; text: string }>;
   tag?: string[];
   faqs?: string[];
-  intro?: string; // Common enough to be here
-  problem?: string; // Common enough to be here
+  intro?: string;
+  problem?: string;
 }
 
 interface HtmlTaskMetadata extends BaseTaskMetadata {
-  // 'problem' is already in BaseTaskMetadata for lecture/text
   questions?: QuizQuestion[];
-  multi_choice?: boolean; // Specific to quiz action
-  // For action: 'blank'
-  precode?: string; // The string with {{}} for the blank
-  answer?: string; // The string with {{correct_answer}}
+  multi_choice?: boolean;
+  // For action: 'blank' (free text or with options)
+  precode?: string; // Sentence with {{}} for free text blank, or template with placeholder for options
+  answer?: string; // Correct text for free text blank: "text {{correct_word}}". Not used if 'questions' provides options.
+  // For action: 'blank' with options, structure is within 'questions'
 }
 
 interface AdsTaskMetadata extends BaseTaskMetadata {
-  // 'intro' is already in BaseTaskMetadata
-  video: string; // path or URL
+  video: string;
   video_source?: string;
 }
 
@@ -62,11 +61,10 @@ interface CodeEvent {
   key: string;
 }
 interface CodeTaskMetadata extends BaseTaskMetadata {
-  // 'problem' is already in BaseTaskMetadata
-  precode: { [key: string]: string }; // e.g., {"python": "print('hello')"} or {"py": "code with {{}}"} for code_blank
-  code_language?: string; // For regular code tasks
-  language?: string; // Sometimes used, esp. for action: 'code_blank'
-  answer?: Array<{ [key: string]: string }>; // For verifiable code answers
+  precode: { [key: string]: string };
+  code_language?: string;
+  language?: string;
+  answer?: Array<{ [key: string]: string }>; // e.g. [{ "py": "print('hello')" }] for verifiable code
   solution?: { [key: string]: { [key: string]: string[] } }; // For code_blank solutions
   auto_verify?: boolean;
   verification_type?: string;
@@ -75,10 +73,9 @@ interface CodeTaskMetadata extends BaseTaskMetadata {
   events?: CodeEvent[];
 }
 
-// Discriminated union for Task types
 interface BaseTypedTask<TType extends string, TMetadata extends BaseTaskMetadata> {
   task_type: TType;
-  action?: 'lecture' | 'quiz' | 'text' | 'blank' | 'code_blank'; // Added 'blank' and 'code_blank'
+  action?: 'lecture' | 'quiz' | 'text' | 'blank' | 'code_blank' | 'code'; // Added 'code'
   metadata: TMetadata;
 }
 
@@ -117,6 +114,7 @@ interface Course {
 
 const courseData: Course = courseDataFromFile;
 
+const getTaskId = (lessonId: number, taskIndex: number) => `${lessonId}-${taskIndex}`;
 
 // --- Main App Component ---
 function CoursePilotApp() {
@@ -125,6 +123,7 @@ function CoursePilotApp() {
   const [selectedTaskIndex, setSelectedTaskIndex] = useState<number>(0);
   const [quizFeedback, setQuizFeedback] = useState<{ question: string; studentAnswer: string; rewrittenQuestion: string | null } | null>(null);
   const [isAILoading, setIsAILoading] = useState<boolean>(false);
+  const [taskCompletionStatus, setTaskCompletionStatus] = useState<{ [key: string]: boolean }>({});
   const { toast } = useToast();
 
   const selectedLesson = useMemo(() => {
@@ -140,6 +139,37 @@ function CoursePilotApp() {
     return selectedLesson?.tasks[selectedTaskIndex] || null;
   }, [selectedLesson, selectedTaskIndex]);
 
+  const currentTaskId = useMemo(() => {
+    if (selectedLessonId === null || !currentTask) return '';
+    return getTaskId(selectedLessonId, selectedTaskIndex);
+  }, [selectedLessonId, currentTask, selectedTaskIndex]);
+
+  const isCurrentTaskSolved = useMemo(() => {
+    if (!currentTask) return false;
+    // Tasks like 'lecture' or 'ads' are considered solved on view
+    if (currentTask.task_type === 'ads' || (currentTask.task_type === 'html' && (currentTask.action === 'lecture' || currentTask.action === 'text'))) {
+        return true;
+    }
+    return !!taskCompletionStatus[currentTaskId];
+  }, [taskCompletionStatus, currentTaskId, currentTask]);
+  
+  const markTaskAsSolved = useCallback(() => {
+    if (currentTaskId) {
+      setTaskCompletionStatus(prev => ({ ...prev, [currentTaskId]: true }));
+    }
+  }, [currentTaskId]);
+
+
+  useEffect(() => {
+    // Automatically mark lecture/ads tasks as solved when they become current
+    if (currentTask && (currentTask.task_type === 'ads' || (currentTask.task_type === 'html' && (currentTask.action === 'lecture' || currentTask.action === 'text')))) {
+      if (currentTaskId && !taskCompletionStatus[currentTaskId]) {
+        markTaskAsSolved();
+      }
+    }
+  }, [currentTask, currentTaskId, markTaskAsSolved, taskCompletionStatus]);
+
+
   const handleLessonClick = (lessonId: number, moduleId: number) => {
     setSelectedLessonId(lessonId);
     setSelectedModuleId(moduleId);
@@ -149,8 +179,16 @@ function CoursePilotApp() {
 
   const handleNextTask = () => {
     if (selectedLesson && selectedTaskIndex < selectedLesson.tasks.length - 1) {
-      setSelectedTaskIndex(prev => prev + 1);
-      setQuizFeedback(null);
+      if (isCurrentTaskSolved) {
+        setSelectedTaskIndex(prev => prev + 1);
+        setQuizFeedback(null);
+      } else {
+        toast({
+          title: "Task Not Completed",
+          description: "Please complete the current task before moving to the next one.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -164,17 +202,16 @@ function CoursePilotApp() {
   const handleQuizAnswer = async (question: QuizQuestion, studentAnswer: QuizAnswer) => {
     const questionText = question.text;
     const studentAnswerText = studentAnswer.text;
-    // For 'option' type, compare studentAnswer.value with question.answer (which is string value)
-    // For 'blank' type, this function might need adjustment or a different handler for correctness.
-    // Assuming 'correct' is determined by comparing studentAnswer.value.toString() to question.answer for 'option' type.
-    const isCorrect = question.type === 'option' && studentAnswer.value.toString() === question.answer;
+    const isCorrect = studentAnswer.value.toString() === question.answer;
 
     if (isCorrect) {
       setQuizFeedback(null);
+      markTaskAsSolved();
       toast({
         title: question.success || "Correct!",
         description: "Great job!",
         variant: "default",
+        icon: <CheckCircle2 className="h-5 w-5 text-green-500" />,
       });
     } else {
       if (!selectedLesson || !currentTask) return;
@@ -182,11 +219,7 @@ function CoursePilotApp() {
       setQuizFeedback({ question: questionText, studentAnswer: studentAnswerText, rewrittenQuestion: "Thinking of a hint..." });
       try {
         const lessonContentForAI = selectedLesson.aim + "\n" + (selectedLesson.description || "") + "\n" +
-          selectedLesson.tasks.map(t => {
-            if (t.metadata.problem) return t.metadata.problem;
-            if (t.metadata.intro) return t.metadata.intro;
-            return t.metadata.caption;
-          }).join("\n\n");
+          selectedLesson.tasks.map(t => t.metadata.problem || t.metadata.intro || t.metadata.caption).join("\n\n");
 
         const input: RewriteQuizQuestionInput = {
           question: questionText,
@@ -199,6 +232,7 @@ function CoursePilotApp() {
             title: question.failed || "Not quite!",
             description: "Here's a hint to help you.",
             variant: "destructive",
+            icon: <XCircle className="h-5 w-5 text-red-500" />,
         });
       } catch (error) {
         console.error("AI Error:", error);
@@ -206,6 +240,7 @@ function CoursePilotApp() {
           title: "Error getting hint",
           description: "Could not generate a hint at this time.",
           variant: "destructive",
+          icon: <AlertCircle className="h-5 w-5 text-red-500" />,
         });
         setQuizFeedback({ question: questionText, studentAnswer: studentAnswerText, rewrittenQuestion: "Could not load hint." });
       } finally {
@@ -214,21 +249,23 @@ function CoursePilotApp() {
     }
   };
   
-  const handleBlankSubmit = (isCorrect: boolean, successMsg?: string, failedMsg?: string) => {
+  const handleGenericSubmit = (isCorrect: boolean, successMsg?: string, failedMsg?: string, solveTask: boolean = true) => {
     if (isCorrect) {
+      if(solveTask) markTaskAsSolved();
       toast({
         title: successMsg || "Correct!",
         description: "Well done!",
+        icon: <CheckCircle2 className="h-5 w-5 text-green-500" />,
       });
     } else {
       toast({
         title: failedMsg || "Not quite!",
         description: "Try that again.",
         variant: "destructive",
+        icon: <XCircle className="h-5 w-5 text-red-500" />,
       });
     }
   };
-
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -244,12 +281,14 @@ function CoursePilotApp() {
         currentTask={currentTask}
         selectedTaskIndex={selectedTaskIndex}
         onQuizAnswer={handleQuizAnswer}
-        onBlankSubmit={handleBlankSubmit}
+        onGenericSubmit={handleGenericSubmit}
         quizFeedback={quizFeedback}
         isAILoading={isAILoading}
         clearQuizFeedback={() => setQuizFeedback(null)}
         onNextTask={handleNextTask}
         onPrevTask={handlePrevTask}
+        markTaskAsSolved={markTaskAsSolved} // Pass this down
+        isCurrentTaskSolved={isCurrentTaskSolved}
       />
     </div>
   );
@@ -294,18 +333,20 @@ interface MainContentAreaProps {
   currentTask: Task | null;
   selectedTaskIndex: number;
   onQuizAnswer: (question: QuizQuestion, studentAnswer: QuizAnswer) => void;
-  onBlankSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
+  onGenericSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string, solveTask?: boolean) => void;
   quizFeedback: { question: string; studentAnswer: string; rewrittenQuestion: string | null } | null;
   isAILoading: boolean;
   clearQuizFeedback: () => void;
   onNextTask: () => void;
   onPrevTask: () => void;
+  markTaskAsSolved: () => void;
+  isCurrentTaskSolved: boolean;
 }
 
 function MainContentArea({
   selectedLesson, currentTask, selectedTaskIndex, 
-  onQuizAnswer, onBlankSubmit, quizFeedback, isAILoading, clearQuizFeedback,
-  onNextTask, onPrevTask
+  onQuizAnswer, onGenericSubmit, quizFeedback, isAILoading, clearQuizFeedback,
+  onNextTask, onPrevTask, markTaskAsSolved, isCurrentTaskSolved
 }: MainContentAreaProps) {
   if (!selectedLesson || !currentTask) {
     return (
@@ -322,16 +363,18 @@ function MainContentArea({
         <TaskViewer
           task={currentTask}
           onQuizAnswer={onQuizAnswer}
-          onBlankSubmit={onBlankSubmit}
+          onGenericSubmit={onGenericSubmit}
           quizFeedback={quizFeedback}
           isAILoading={isAILoading}
           clearQuizFeedback={clearQuizFeedback}
+          markTaskAsSolved={markTaskAsSolved}
         />
         <TaskNavigationControls
           onPrevTask={onPrevTask}
           onNextTask={onNextTask}
           selectedTaskIndex={selectedTaskIndex}
           totalTasks={selectedLesson.tasks.length}
+          isCurrentTaskSolved={isCurrentTaskSolved}
         />
       </div>
     </main>
@@ -361,9 +404,11 @@ interface TaskNavigationControlsProps {
   onNextTask: () => void;
   selectedTaskIndex: number;
   totalTasks: number;
+  isCurrentTaskSolved: boolean;
 }
 
-function TaskNavigationControls({ onPrevTask, onNextTask, selectedTaskIndex, totalTasks }: TaskNavigationControlsProps) {
+function TaskNavigationControls({ onPrevTask, onNextTask, selectedTaskIndex, totalTasks, isCurrentTaskSolved }: TaskNavigationControlsProps) {
+  const isLastTask = selectedTaskIndex === totalTasks - 1;
   return (
     <div className="mt-8 flex justify-between items-center">
       <Button
@@ -379,9 +424,10 @@ function TaskNavigationControls({ onPrevTask, onNextTask, selectedTaskIndex, tot
       </span>
       <Button
         onClick={onNextTask}
-        disabled={selectedTaskIndex === totalTasks - 1}
+        disabled={isLastTask || !isCurrentTaskSolved}
         variant="outline"
         className="hover:bg-accent hover:text-accent-foreground"
+        title={!isCurrentTaskSolved && !isLastTask ? "Complete current task to proceed" : undefined}
       >
         Next <ArrowRight className="ml-2 h-4 w-4" />
       </Button>
@@ -420,7 +466,7 @@ function ModuleAccordion({ module, selectedLessonId, onLessonClick, isActiveModu
       </button>
       <div
         id={`module-${module.module_id}-content`}
-        className={`overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px]' : 'max-h-0'}`} // Increased max-h for more lessons
+        className={`overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px]' : 'max-h-0'}`}
       >
         <ul className="p-2 space-y-1 bg-background rounded-b-md">
           {module.lessons.map(lesson => (
@@ -482,23 +528,34 @@ function WelcomeMessage() {
 interface HtmlTaskDisplayProps {
   task: HtmlTask;
   onQuizAnswer: (question: QuizQuestion, studentAnswer: QuizAnswer) => void;
-  onBlankSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
+  onGenericSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
   quizFeedback: { question: string; studentAnswer: string; rewrittenQuestion: string | null } | null;
   isAILoading: boolean;
   clearQuizFeedback: () => void;
+  markTaskAsSolved: () => void;
 }
 
-function HtmlTaskDisplay({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAILoading, clearQuizFeedback }: HtmlTaskDisplayProps) {
+function HtmlTaskDisplay({ task, onQuizAnswer, onGenericSubmit, quizFeedback, isAILoading, clearQuizFeedback, markTaskAsSolved }: HtmlTaskDisplayProps) {
   const metadata = task.metadata;
 
-  // Quiz rendering
-  if (task.action === 'quiz' && metadata.questions && metadata.questions.length > 0) {
-    const currentQuizQuestion = metadata.questions[0]; // Assuming one question per quiz task
+  // Quiz or Blank with Options rendering
+  if ((task.action === 'quiz' || (task.action === 'blank' && metadata.questions && metadata.questions.find(q => q.type === 'blank_options'))) && metadata.questions && metadata.questions.length > 0) {
+    const currentQuizQuestion = metadata.questions[0]; // Assuming one question per task for quiz/blank_options
     const originalQuestionText = currentQuizQuestion.text;
     
     const displayedQuestionText = (quizFeedback?.question === originalQuestionText && quizFeedback.rewrittenQuestion) 
                                    ? quizFeedback.rewrittenQuestion 
                                    : originalQuestionText;
+
+    const handleOptionClick = (answer: QuizAnswer) => {
+      onQuizAnswer(currentQuizQuestion, answer); // Reuses onQuizAnswer for blank_options
+    };
+
+    // For 'blank_options', we might need to render the precode with a placeholder for options
+    let precodeParts: string[] = [];
+    if (task.action === 'blank' && currentQuizQuestion.type === 'blank_options' && metadata.precode) {
+        precodeParts = metadata.precode.split('{{}}');
+    }
 
     return (
       <div className="space-y-4">
@@ -520,7 +577,17 @@ function HtmlTaskDisplay({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAI
             </CardContent>
           </Card>
         )}
-        <p className="text-lg font-body">{displayedQuestionText}</p>
+
+        {task.action === 'blank' && currentQuizQuestion.type === 'blank_options' && precodeParts.length > 0 ? (
+            <div className="font-body text-lg">
+                <span>{precodeParts[0]}</span>
+                 <span className="inline-block mx-2 text-primary font-semibold">(Choose an option below)</span>
+                <span>{precodeParts[1]}</span>
+            </div>
+        ) : (
+            <p className="text-lg font-body">{displayedQuestionText}</p>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {currentQuizQuestion.answers.map((answer, index) => (
             <Button
@@ -528,7 +595,7 @@ function HtmlTaskDisplay({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAI
               variant="outline"
               size="lg"
               className="justify-start p-4 text-left h-auto whitespace-normal hover:bg-accent hover:text-accent-foreground transition-transform transform hover:scale-105"
-              onClick={() => onQuizAnswer(currentQuizQuestion, answer)}
+              onClick={() => handleOptionClick(answer)}
               disabled={isAILoading}
             >
               {isAILoading && quizFeedback?.studentAnswer === answer.text && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -540,14 +607,15 @@ function HtmlTaskDisplay({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAI
     );
   }
 
-  // Fill-in-the-blank HTML rendering
-  if (task.action === 'blank' && metadata.precode && metadata.answer) {
+  // Fill-in-the-blank (free text) HTML rendering
+  if (task.action === 'blank' && metadata.precode && metadata.answer && !metadata.questions) {
     const [textBefore, textAfter] = metadata.precode.split('{{}}');
     const correctAnswer = metadata.answer.match(/\{\{(.*?)\}\}/)?.[1] || '';
     const [userAnswer, setUserAnswer] = useState('');
 
     const handleSubmitBlank = () => {
-      onBlankSubmit(userAnswer.trim().toLowerCase() === correctAnswer.toLowerCase(), "Correct!", "Not quite, try again!");
+      const isCorrect = userAnswer.trim().toLowerCase() === correctAnswer.toLowerCase();
+      onGenericSubmit(isCorrect, metadata.questions?.[0]?.success, metadata.questions?.[0]?.failed);
     };
 
     return (
@@ -575,6 +643,7 @@ function HtmlTaskDisplay({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAI
   return (
     <div>
       <h3 className="text-2xl font-headline font-semibold mb-3">{metadata.caption}</h3>
+      {metadata.intro && <p className="font-body text-muted-foreground mb-2">{metadata.intro}</p>}
       {metadata.problem && <div className="prose prose-lg max-w-none font-body course-html-content" dangerouslySetInnerHTML={{ __html: metadata.problem }} />}
       <style jsx global>{`
         .course-html-content h1 { @apply text-2xl font-headline font-semibold mb-4 mt-6 text-primary; }
@@ -618,14 +687,37 @@ function AdsTaskDisplay({ task }: AdsTaskDisplayProps) {
 
 interface CodeTaskDisplayProps {
   task: CodeTask;
-  onBlankSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void; // For code_blank
+  onGenericSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
+  markTaskAsSolved: () => void;
 }
 
-function CodeTaskDisplay({ task, onBlankSubmit }: CodeTaskDisplayProps) {
+function CodeTaskDisplay({ task, onGenericSubmit, markTaskAsSolved }: CodeTaskDisplayProps) {
   const metadata = task.metadata;
   const lang = metadata.code_language || metadata.language || 'text';
-  const [userCodeAnswer, setUserCodeAnswer] = useState('');
+  const [userCode, setUserCode] = useState(metadata.precode?.[lang] || '');
+  
+  // For code_blank
+  const [userBlankAnswer, setUserBlankAnswer] = useState('');
 
+
+  const handleCodeSubmit = () => {
+    if (task.action === 'code' && metadata.answer && metadata.answer.length > 0) {
+      const expectedCode = metadata.answer[0]?.[lang];
+      if (expectedCode) {
+        const isCorrect = userCode.trim() === expectedCode.trim();
+        onGenericSubmit(isCorrect, "Code Submitted Correctly!", "Code is not quite right. Check your logic.");
+        // markTaskAsSolved is handled by onGenericSubmit if correct
+      } else {
+        // No specific answer to check against, consider it "submitted"
+        onGenericSubmit(true, "Code Submitted!", "Could not verify code.", false); // Don't mark as solved if not verifiable
+        markTaskAsSolved(); // Or decide if this type of task auto-solves
+      }
+    } else {
+      // For tasks without a verifiable answer (e.g. drawing, general coding without solution)
+      onGenericSubmit(true, "Code Processed", "No specific check for this task.", false);
+      markTaskAsSolved(); // Mark as solved on any submission if not verifiable
+    }
+  };
 
   if (task.action === 'code_blank' && metadata.precode && metadata.precode[lang] && metadata.solution) {
     const precodeParts = metadata.precode[lang].split(/\{\{|\}\}/g);
@@ -633,18 +725,17 @@ function CodeTaskDisplay({ task, onBlankSubmit }: CodeTaskDisplayProps) {
     let blankIndex = 0;
 
     const handleSubmitCodeBlank = () => {
-        // Basic check: see if user's answer is one of the solutions for the first blank
-        // This needs to be more robust for multiple blanks
-        if (solutionsForLang && solutionsForLang["0"] && solutionsForLang["0"].includes(userCodeAnswer.trim())) {
-            onBlankSubmit(true, "Correct!", "Try again!");
+        if (solutionsForLang && solutionsForLang["0"] && solutionsForLang["0"].includes(userBlankAnswer.trim())) {
+            onGenericSubmit(true, "Correct!", "Try again!");
         } else {
-            onBlankSubmit(false, "Correct!", "Try again!");
+            onGenericSubmit(false, "Correct!", "Try again!");
         }
     };
     
     return (
       <div className="space-y-3">
         <h3 className="text-2xl font-headline font-semibold">{metadata.caption}</h3>
+        {metadata.intro && <p className="font-body text-muted-foreground mb-2">{metadata.intro}</p>}
         {metadata.problem && <p className="font-body text-lg" dangerouslySetInnerHTML={{ __html: metadata.problem }} />}
         <div className="bg-gray-900 text-gray-100 p-4 rounded-md shadow-md font-code">
           {precodeParts.map((part, idx) => {
@@ -652,21 +743,19 @@ function CodeTaskDisplay({ task, onBlankSubmit }: CodeTaskDisplayProps) {
               return <span key={idx}>{part}</span>;
             } else {
               const currentBlankIndex = blankIndex++;
-              // For simplicity, this example only handles one blank input.
-              // A more complex setup would be needed for multiple {{}} blanks.
-              if (currentBlankIndex === 0) {
+              if (currentBlankIndex === 0) { // Simple: only one blank input
                 return (
                   <input
                     key={idx}
                     type="text"
-                    value={userCodeAnswer}
-                    onChange={(e) => setUserCodeAnswer(e.target.value)}
+                    value={userBlankAnswer}
+                    onChange={(e) => setUserBlankAnswer(e.target.value)}
                     className="bg-gray-700 text-gray-100 border border-gray-600 rounded mx-1 px-1 py-0.5 w-24"
                     aria-label={`Fill in blank ${currentBlankIndex + 1}`}
                   />
                 );
               }
-              return <span key={idx} className="text-yellow-400">(blank {currentBlankIndex +1})</span>; // Placeholder for subsequent blanks
+              return <span key={idx} className="text-yellow-400">(blank {currentBlankIndex +1})</span>;
             }
           })}
         </div>
@@ -676,20 +765,24 @@ function CodeTaskDisplay({ task, onBlankSubmit }: CodeTaskDisplayProps) {
     );
   }
 
-  // Default code task display
+  // Default code task display (action: 'code')
   return (
     <div className="space-y-3">
       <h3 className="text-2xl font-headline font-semibold">{metadata.caption}</h3>
+       {metadata.intro && <p className="font-body text-muted-foreground mb-2">{metadata.intro}</p>}
       <div className="flex items-center space-x-2 text-sm text-muted-foreground">
         <CodeIcon className="w-4 h-4"/> 
         <span>Language: {lang}</span>
       </div>
       {metadata.problem && <p className="font-body text-lg" dangerouslySetInnerHTML={{ __html: metadata.problem }} />}
-      {metadata.precode && metadata.precode[lang] && (
-        <div className="bg-gray-900 text-gray-100 p-4 rounded-md shadow-md overflow-x-auto">
-          <pre><code className={`language-${lang} font-code`}>{metadata.precode[lang]}</code></pre>
-        </div>
-      )}
+      
+      <Textarea
+        value={userCode}
+        onChange={(e) => setUserCode(e.target.value)}
+        placeholder={`Enter your ${lang} code here...`}
+        className="font-code bg-gray-900 text-gray-100 h-48 min-h-[120px] rounded-md shadow-inner border-gray-700 focus:border-primary"
+      />
+      <Button onClick={handleCodeSubmit}>Submit Code</Button>
       {metadata.hint && <p className="text-sm italic text-muted-foreground">Hint: {metadata.hint}</p>}
        {metadata.events && metadata.drawing && (
         <div>
@@ -710,47 +803,67 @@ function CodeTaskDisplay({ task, onBlankSubmit }: CodeTaskDisplayProps) {
 interface TaskViewerProps {
   task: Task;
   onQuizAnswer: (question: QuizQuestion, studentAnswer: QuizAnswer) => void;
-  onBlankSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
+  onGenericSubmit: (isCorrect: boolean, successMsg?: string, failedMsg?: string) => void;
   quizFeedback: { question: string; studentAnswer: string; rewrittenQuestion: string | null } | null;
   isAILoading: boolean;
   clearQuizFeedback: () => void;
+  markTaskAsSolved: () => void;
 }
 
-function TaskViewer({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAILoading, clearQuizFeedback }: TaskViewerProps) {
+function TaskViewer({ task, onQuizAnswer, onGenericSubmit, quizFeedback, isAILoading, clearQuizFeedback, markTaskAsSolved }: TaskViewerProps) {
+  const getTaskIcon = (taskType: string) => {
+    switch (taskType) {
+      case 'html': return <MonitorPlay className="w-5 h-5 mr-2 text-primary" />;
+      case 'ads': return <Film className="w-5 h-5 mr-2 text-primary" />;
+      case 'code': return <Terminal className="w-5 h-5 mr-2 text-primary" />;
+      default: return <BookOpen className="w-5 h-5 mr-2 text-primary" />;
+    }
+  };
+  
   const renderTaskContent = () => {
     switch (task.task_type) {
       case 'html':
         return <HtmlTaskDisplay 
                   task={task} 
                   onQuizAnswer={onQuizAnswer}
-                  onBlankSubmit={onBlankSubmit}
+                  onGenericSubmit={onGenericSubmit}
                   quizFeedback={quizFeedback}
                   isAILoading={isAILoading}
                   clearQuizFeedback={clearQuizFeedback}
+                  markTaskAsSolved={markTaskAsSolved}
                 />;
       case 'ads':
+        // ADS tasks are auto-solved when viewed (handled in CoursePilotApp useEffect)
         return <AdsTaskDisplay task={task} />;
       case 'code':
-        return <CodeTaskDisplay task={task} onBlankSubmit={onBlankSubmit} />;
+        return <CodeTaskDisplay task={task} onGenericSubmit={onGenericSubmit} markTaskAsSolved={markTaskAsSolved} />;
       default:
         const exhaustiveCheck: never = task; 
-        return <p className="font-body">Unsupported task type: {exhaustiveCheck['task_type']}</p>;
+        return <p className="font-body">Unsupported task type: {(exhaustiveCheck as any)?.task_type}</p>;
     }
   };
 
   return (
     <Card className="shadow-xl">
-      <CardHeader className="pb-2">
-        {task.metadata.tag && task.metadata.tag.length > 0 && (
-          <div className="flex space-x-2 mb-2">
-            {task.metadata.tag.map(t => <Badge key={t} variant="secondary">{t}</Badge>)}
-          </div>
-        )}
-         <div className="flex items-center text-sm text-muted-foreground">
-          <Star className="w-4 h-4 mr-1 text-yellow-400" /> Difficulty: {task.metadata.difficulty}
+      <CardHeader className="pb-4">
+        <div className="flex justify-between items-start">
+            <div>
+                {task.metadata.tag && task.metadata.tag.length > 0 && (
+                <div className="flex space-x-2 mb-2">
+                    {task.metadata.tag.map(t => <Badge key={t} variant="secondary">{t}</Badge>)}
+                </div>
+                )}
+                <div className="flex items-center text-sm text-muted-foreground">
+                  {getTaskIcon(task.task_type)} 
+                  <span className="font-semibold mr-2 capitalize">{task.task_type.replace('_', ' ')} Task</span>
+                </div>
+            </div>
+            <div className="flex items-center text-sm text-muted-foreground">
+                <Star className="w-4 h-4 mr-1 text-yellow-400" /> Difficulty: {task.metadata.difficulty}
+            </div>
         </div>
       </CardHeader>
-      <CardContent className="p-6 pt-2">
+      <CardContent className="p-6 pt-0">
         {renderTaskContent()}
       </CardContent>
     </Card>
@@ -760,3 +873,4 @@ function TaskViewer({ task, onQuizAnswer, onBlankSubmit, quizFeedback, isAILoadi
 export default function CoursePilotPage() {
   return <CoursePilotApp />;
 }
+
