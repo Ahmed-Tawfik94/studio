@@ -4,110 +4,78 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ChevronDown, ChevronRight, BookOpen, HelpCircle, PlayCircle, Code2 as CodeIcon,
-  ArrowLeft, ArrowRight, Lightbulb, Loader2, AlertCircle, RotateCcw, XCircle, CheckCircle, GraduationCap
+  ArrowLeft, ArrowRight, Lightbulb, Loader2, AlertCircle, RotateCcw, XCircle, CheckCircle, GraduationCap, Star
 } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { rewriteQuizQuestion, RewriteQuizQuestionInput } from '@/ai/flows/rewrite-quiz-question';
 
-const courseData = {
-  "course_name": "AI-Powered Programming for Young Innovators",
-  "modules": [
-    {
-      "module_id": 1,
-      "module_title": "What in the World is AI? (And Why Should I Care?)",
-      "lessons": [
-        {
-          "lesson_id": 1.1,
-          "lesson_title": "Meet AI! Your Digital Super-Helper",
-          "aim": "To understand what Artificial Intelligence is and see examples in everyday life.",
-          "tasks": [
-            {"task_type": "html" as const, "action": "lecture" as const, "metadata": {"caption": "What is AI?", "problem": "<h1>What is AI?</h1><p>Artificial Intelligence (AI) is the science of making computers do things that normally require human intelligence.</p><p>Think about your favorite video game characters that seem to think for themselves, or how your phone can understand your voice commands. That's AI in action!</p>"}},
-            {"task_type": "ads" as const, "metadata": {"caption": "AI in Your Life", "intro": "Watch this short video (placeholder) to see how AI is part of your daily life, from movie recommendations to spam filters in your email.", "video": "path/to/ai_in_life_video.mp4"}},
-            {"task_type": "html" as const, "action": "quiz" as const, "metadata": {"caption": "Quiz: Identifying AI", "questions": [{"text": "Which of these is most likely powered by AI?", "answers": [{"text": "Calculator", "correct": false}, {"text": "Smart Speaker", "correct": true}, {"text": "Toaster", "correct": false}]}]}}
-          ]
-        },
-        {
-          "lesson_id": 1.2,
-          "lesson_title": "The Magic of LLMs: Talking to AI!",
-          "aim": "To introduce Large Language Models (LLMs) and the concepts of prompts and completions.",
-          "tasks": [
-            {"task_type": "html" as const, "action": "text" as const, "metadata": {"caption": "LLMs: Your New Language Superpower", "problem": "<h1>Large Language Models</h1><p>Large Language Models (LLMs) are a type of AI that are amazing at understanding and creating human-like language. They are trained on vast amounts of text and can write stories, answer questions, translate languages, and much more!</p><p>A <strong>prompt</strong> is what you type into an LLM to ask it to do something. A <strong>completion</strong> is the LLM's response.</p>"}}
-          ]
-        }
-      ]
-    },
-    {
-      "module_id": 2,
-      "module_title": "Talking to AI: The Art of Prompt Engineering",
-      "lessons": [
-        {
-          "lesson_id": 2.1,
-          "lesson_title": "The Power of Clarity: Be Specific!",
-          "aim": "To understand the importance of clear and specific instructions when prompting AI.",
-          "tasks": [
-            {"task_type": "html" as const, "action": "text" as const, "metadata": {"caption": "Why Your AI Needs Crystal Clear Instructions", "problem": "<h1>Be Specific!</h1><p>The golden rule of prompting is: the clearer your instruction, the better the AI's response will be. If you ask a vague question, you'll get a vague answer. If you want a specific output, tell the AI exactly what you're looking for.</p><p>For example, instead of 'Write a story,' try 'Write a short, funny story about a cat who learns to fly, set in a bustling city.' See the difference?</p>"}}
-          ]
-        }
-      ]
-    },
-    {
-      "module_id": 8,
-      "module_title": "Your First AI-Powered Project: Smart Story Generator! (Capstone)",
-      "lessons": [
-        {"lesson_id": 8.1, "lesson_title": "Project Planning: Designing Your Story Generator", "aim": "To plan the structure and functionality of the application.", "tasks": [
-          {"task_type": "html" as const, "action": "text" as const, "metadata": {"caption": "Project Blueprint: Planning Your AI Story", "problem": "<h1>Planning Your Smart Story Generator</h1><p>Every great invention starts with a plan. Before we write code, we'll map out how our 'Smart Story Generator' will work.</p><ul><li>What kind of stories will it generate? (e.g., fantasy, sci-fi, adventure)</li><li>What inputs will the user provide? (e.g., main character, setting, plot twist)</li><li>What will the output look like?</li></ul><p>Thinking about these questions helps us design a better final product.</p>"}}
-        ]},
-        {"lesson_id": 8.2, "lesson_title": "Building Blocks: Coding Your Generator", "aim": "To write the core Python code for the story generator.", "tasks": [
-          {"task_type": "code" as const, "code_language": "python", "metadata": {"caption": "Code Challenge: Get Input", "problem": "In Python, how do you get input from a user and store it in a variable called 'userName'?", "precode": {"py": "# Your code here\n# Hint: Use the input() function."}}}
-        ]}
-      ]
-    }
-  ]
-};
+// --- Enhanced Type Definitions based on Schema ---
 
-// --- Type Definitions ---
-interface Answer {
+interface QuizAnswer {
   text: string;
-  correct?: boolean;
+  correct?: boolean; // Maintained for compatibility with existing logic
+  value?: number; // From schema
 }
 
-interface Question {
+interface QuizQuestion {
   text: string;
-  answers: Answer[];
+  type: string; // From schema (e.g., 'single-choice', 'multiple-choice')
+  answers: QuizAnswer[];
+  answer?: string; // Correct answer key/text (from schema, optional for now)
+  hint?: string; // (from schema, optional)
+  success?: string; // (from schema, optional)
+  failed?: string; // (from schema, optional)
 }
 
 interface BaseTaskMetadata {
   caption: string;
+  difficulty: number; // Required by schema
+  hint?: string;
+  hints?: Array<{ cost?: number; text: string }>;
+  tag?: string[];
+  faqs?: string[];
 }
 
 interface HtmlTaskMetadata extends BaseTaskMetadata {
-  problem: string;
+  problem: string; // HTML content for lecture/text. For quiz, could be intro/context.
+  // For action === 'quiz'
+  questions?: QuizQuestion[];
+  multi_choice?: boolean;
 }
 
 interface AdsTaskMetadata extends BaseTaskMetadata {
   intro: string;
-  video: string;
-}
-
-interface QuizTaskMetadata extends BaseTaskMetadata {
-  questions: Question[];
+  video: string; // path or URL
+  video_source?: string;
 }
 
 interface CodeTaskMetadata extends BaseTaskMetadata {
   problem: string;
   precode: { [key: string]: string };
+  code_language: string; // Moved here from Task root for specificity
+  answer?: Array<{ [key: string]: string }>;
+  solution?: { [key: string]: { [key: string]: string[] } };
+  auto_verify?: boolean;
+  verification_type?: string;
+  drawing?: boolean;
+  publish_web?: boolean;
 }
 
-type TaskMetadata = HtmlTaskMetadata | AdsTaskMetadata | QuizTaskMetadata | CodeTaskMetadata;
-
-interface Task {
-  task_type: 'html' | 'ads' | 'code';
-  action?: 'lecture' | 'quiz' | 'text';
-  code_language?: string;
-  metadata: TaskMetadata;
+// Discriminated union for Task types
+interface BaseTypedTask<TType extends string, TMetadata extends BaseTaskMetadata> {
+  task_type: TType;
+  action?: 'lecture' | 'quiz' | 'text'; // Primarily for 'html'
+  metadata: TMetadata;
 }
+
+type HtmlTask = BaseTypedTask<'html', HtmlTaskMetadata>;
+type AdsTask = BaseTypedTask<'ads', AdsTaskMetadata>;
+type CodeTask = BaseTypedTask<'code', CodeTaskMetadata>;
+
+type Task = HtmlTask | AdsTask | CodeTask;
 
 interface Lesson {
   lesson_id: number;
@@ -126,6 +94,63 @@ interface Course {
   course_name: string;
   modules: Module[];
 }
+
+const courseData: Course = {
+  "course_name": "AI-Powered Programming for Young Innovators",
+  "modules": [
+    {
+      "module_id": 1,
+      "module_title": "What in the World is AI? (And Why Should I Care?)",
+      "lessons": [
+        {
+          "lesson_id": 1.1,
+          "lesson_title": "Meet AI! Your Digital Super-Helper",
+          "aim": "To understand what Artificial Intelligence is and see examples in everyday life.",
+          "tasks": [
+            {"task_type": "html", "action": "lecture", "metadata": {"caption": "What is AI?", "difficulty": 1, "problem": "<h1>What is AI?</h1><p>Artificial Intelligence (AI) is the science of making computers do things that normally require human intelligence.</p><p>Think about your favorite video game characters that seem to think for themselves, or how your phone can understand your voice commands. That's AI in action!</p>"}},
+            {"task_type": "ads", "metadata": {"caption": "AI in Your Life", "difficulty": 1, "intro": "Watch this short video (placeholder) to see how AI is part of your daily life, from movie recommendations to spam filters in your email.", "video": "path/to/ai_in_life_video.mp4"}},
+            {"task_type": "html", "action": "quiz", "metadata": {"caption": "Quiz: Identifying AI", "difficulty": 1, "questions": [{"text": "Which of these is most likely powered by AI?", "type": "single-choice", "answers": [{"text": "Calculator", "correct": false, "value": 0}, {"text": "Smart Speaker", "correct": true, "value": 1}, {"text": "Toaster", "correct": false, "value": 0}]}]}}
+          ]
+        },
+        {
+          "lesson_id": 1.2,
+          "lesson_title": "The Magic of LLMs: Talking to AI!",
+          "aim": "To introduce Large Language Models (LLMs) and the concepts of prompts and completions.",
+          "tasks": [
+            {"task_type": "html", "action": "text", "metadata": {"caption": "LLMs: Your New Language Superpower", "difficulty": 1, "problem": "<h1>Large Language Models</h1><p>Large Language Models (LLMs) are a type of AI that are amazing at understanding and creating human-like language. They are trained on vast amounts of text and can write stories, answer questions, translate languages, and much more!</p><p>A <strong>prompt</strong> is what you type into an LLM to ask it to do something. A <strong>completion</strong> is the LLM's response.</p>"}}
+          ]
+        }
+      ]
+    },
+    {
+      "module_id": 2,
+      "module_title": "Talking to AI: The Art of Prompt Engineering",
+      "lessons": [
+        {
+          "lesson_id": 2.1,
+          "lesson_title": "The Power of Clarity: Be Specific!",
+          "aim": "To understand the importance of clear and specific instructions when prompting AI.",
+          "tasks": [
+            {"task_type": "html", "action": "text", "metadata": {"caption": "Why Your AI Needs Crystal Clear Instructions", "difficulty": 1, "problem": "<h1>Be Specific!</h1><p>The golden rule of prompting is: the clearer your instruction, the better the AI's response will be. If you ask a vague question, you'll get a vague answer. If you want a specific output, tell the AI exactly what you're looking for.</p><p>For example, instead of 'Write a story,' try 'Write a short, funny story about a cat who learns to fly, set in a bustling city.' See the difference?</p>"}}
+          ]
+        }
+      ]
+    },
+    {
+      "module_id": 8,
+      "module_title": "Your First AI-Powered Project: Smart Story Generator! (Capstone)",
+      "lessons": [
+        {"lesson_id": 8.1, "lesson_title": "Project Planning: Designing Your Story Generator", "aim": "To plan the structure and functionality of the application.", "tasks": [
+          {"task_type": "html", "action": "text", "metadata": {"caption": "Project Blueprint: Planning Your AI Story", "difficulty": 2, "problem": "<h1>Planning Your Smart Story Generator</h1><p>Every great invention starts with a plan. Before we write code, we'll map out how our 'Smart Story Generator' will work.</p><ul><li>What kind of stories will it generate? (e.g., fantasy, sci-fi, adventure)</li><li>What inputs will the user provide? (e.g., main character, setting, plot twist)</li><li>What will the output look like?</li></ul><p>Thinking about these questions helps us design a better final product.</p>"}}
+        ]},
+        {"lesson_id": 8.2, "lesson_title": "Building Blocks: Coding Your Generator", "aim": "To write the core Python code for the story generator.", "tasks": [
+          {"task_type": "code", "metadata": {"caption": "Code Challenge: Get Input", "difficulty": 2, "problem": "In Python, how do you get input from a user and store it in a variable called 'userName'?", "code_language": "python", "precode": {"python": "# Your code here\n# Hint: Use the input() function."}}}
+        ]}
+      ]
+    }
+  ]
+};
+
 
 // --- Main App Component ---
 function CoursePilotApp() {
@@ -153,7 +178,7 @@ function CoursePilotApp() {
     setSelectedLessonId(lessonId);
     setSelectedModuleId(moduleId);
     setSelectedTaskIndex(0);
-    setQuizFeedback(null); // Reset quiz feedback when changing lessons
+    setQuizFeedback(null);
   };
 
   const handleNextTask = () => {
@@ -178,9 +203,8 @@ function CoursePilotApp() {
         description: "Great job! Let's move to the next task.",
         variant: "default",
       });
-      // Automatically move to next task or offer a button
       if (selectedLesson && selectedTaskIndex < selectedLesson.tasks.length - 1) {
-        // Optionally auto-advance: handleNextTask();
+        // Optionally auto-advance or provide a button.
       } else {
         toast({
           title: "Lesson Complete!",
@@ -192,10 +216,17 @@ function CoursePilotApp() {
       setIsAILoading(true);
       setQuizFeedback({ question: questionText, studentAnswer: studentAnswerText, rewrittenQuestion: "Thinking of a hint..." });
       try {
+        const lessonContentForAI = selectedLesson.aim + "\n" + 
+          selectedLesson.tasks.map(t => {
+            if ('problem' in t.metadata) return (t.metadata as HtmlTaskMetadata | CodeTaskMetadata).problem;
+            if ('intro' in t.metadata) return (t.metadata as AdsTaskMetadata).intro;
+            return t.metadata.caption;
+          }).join("\n");
+
         const input: RewriteQuizQuestionInput = {
           question: questionText,
           studentAnswer: studentAnswerText,
-          lessonContent: selectedLesson.aim + "\n" + selectedLesson.tasks.map(t => (t.metadata as any).problem || (t.metadata as any).caption).join("\n"),
+          lessonContent: lessonContentForAI,
         };
         const result = await rewriteQuizQuestion(input);
         setQuizFeedback({ question: questionText, studentAnswer: studentAnswerText, rewrittenQuestion: result.rewrittenQuestion });
@@ -215,7 +246,6 @@ function CoursePilotApp() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      {/* Sidebar */}
       <aside className="w-80 fixed top-0 left-0 h-full bg-card border-r border-border shadow-md flex flex-col overflow-y-auto">
         <div className="p-6 border-b border-border">
           <h1 className="text-2xl font-headline font-semibold text-primary flex items-center">
@@ -236,9 +266,8 @@ function CoursePilotApp() {
         </nav>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 ml-80 p-8 overflow-y-auto">
-        {!selectedLesson ? (
+        {!selectedLesson || !currentTask ? (
           <WelcomeMessage />
         ) : (
           <div className="max-w-4xl mx-auto">
@@ -251,18 +280,15 @@ function CoursePilotApp() {
               </CardHeader>
             </Card>
 
-            {currentTask && (
-              <TaskViewer
-                task={currentTask}
-                lesson={selectedLesson}
-                onQuizAnswer={handleQuizAnswer}
-                quizFeedback={quizFeedback}
-                isAILoading={isAILoading}
-                clearQuizFeedback={() => setQuizFeedback(null)}
-              />
-            )}
+            <TaskViewer
+              task={currentTask}
+              lesson={selectedLesson} 
+              onQuizAnswer={handleQuizAnswer}
+              quizFeedback={quizFeedback}
+              isAILoading={isAILoading}
+              clearQuizFeedback={() => setQuizFeedback(null)}
+            />
 
-            {/* Task Navigation */}
             <div className="mt-8 flex justify-between items-center">
               <Button
                 onClick={handlePrevTask}
@@ -277,7 +303,7 @@ function CoursePilotApp() {
               </span>
               <Button
                 onClick={handleNextTask}
-                disabled={!selectedLesson || selectedTaskIndex === selectedLesson.tasks.length - 1}
+                disabled={selectedTaskIndex === selectedLesson.tasks.length - 1}
                 variant="outline"
                 className="hover:bg-accent hover:text-accent-foreground"
               >
@@ -291,7 +317,7 @@ function CoursePilotApp() {
   );
 }
 
-// --- Sidebar Components ---
+// --- Sidebar Components (ModuleAccordion, LessonItem) --- unchanged, but here for completeness
 interface ModuleAccordionProps {
   module: Module;
   selectedLessonId: number | null;
@@ -363,7 +389,8 @@ function LessonItem({ lesson, onClick, isActive }: LessonItemProps) {
   );
 }
 
-// --- Main Content Components ---
+
+// --- Welcome Message --- unchanged
 function WelcomeMessage() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center">
@@ -379,9 +406,144 @@ function WelcomeMessage() {
   );
 }
 
+// --- Task Specific Display Components ---
+
+interface TaskDisplayProps {
+  // Common props for all task displays, if any
+  metadata: BaseTaskMetadata;
+}
+
+interface HtmlTaskDisplayProps extends TaskDisplayProps {
+  task: HtmlTask;
+  onQuizAnswer: (questionText: string, studentAnswerText: string, isCorrect: boolean) => void;
+  quizFeedback: { question: string; studentAnswer: string; rewrittenQuestion: string | null } | null;
+  isAILoading: boolean;
+  clearQuizFeedback: () => void;
+}
+
+function HtmlTaskDisplay({ task, onQuizAnswer, quizFeedback, isAILoading, clearQuizFeedback }: HtmlTaskDisplayProps) {
+  const metadata = task.metadata;
+
+  // Quiz rendering logic
+  if (task.action === 'quiz' && metadata.questions && metadata.questions.length > 0) {
+    const currentQuizQuestion = metadata.questions[0]; // Assuming one question per quiz task for now
+    const originalQuestionText = currentQuizQuestion.text;
+    const displayedQuestionText = quizFeedback?.rewrittenQuestion || originalQuestionText;
+
+    return (
+      <div className="space-y-4">
+        <h3 className="text-xl font-headline font-semibold">{metadata.caption}</h3>
+        {quizFeedback && quizFeedback.rewrittenQuestion && (
+          <Card className="bg-yellow-50 border-yellow-300 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-lg font-headline text-yellow-700 flex items-center">
+                <Lightbulb className="mr-2 h-5 w-5" /> Here's a Hint!
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-yellow-600 mb-2 font-body">Your answer <code className="bg-yellow-100 p-1 rounded text-yellow-700">{quizFeedback.studentAnswer}</code> to "<span className="italic">{quizFeedback.question}</span>" was incorrect.</p>
+              <p className="text-md font-body text-yellow-800">{quizFeedback.rewrittenQuestion}</p>
+               <Button variant="ghost" size="sm" onClick={clearQuizFeedback} className="mt-2 text-yellow-700 hover:bg-yellow-100">
+                <RotateCcw className="mr-1 h-3 w-3" /> Try Original Question Again
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+        <p className="text-lg font-body">{displayedQuestionText}</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {currentQuizQuestion.answers.map((answer, index) => (
+            <Button
+              key={index}
+              variant="outline"
+              size="lg"
+              className="justify-start p-4 text-left h-auto whitespace-normal hover:bg-accent hover:text-accent-foreground transition-transform transform hover:scale-105"
+              onClick={() => onQuizAnswer(originalQuestionText, answer.text, !!answer.correct)}
+              disabled={isAILoading}
+            >
+              {isAILoading && quizFeedback?.studentAnswer === answer.text && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {answer.text}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Lecture/Text HTML rendering
+  return (
+    <div>
+      <h3 className="text-2xl font-headline font-semibold mb-3">{metadata.caption}</h3>
+      <div className="prose prose-lg max-w-none font-body course-html-content" dangerouslySetInnerHTML={{ __html: metadata.problem }} />
+      <style jsx global>{`
+        .course-html-content h1 { @apply text-2xl font-headline font-semibold mb-4 mt-6 text-primary; }
+        .course-html-content h2 { @apply text-xl font-headline font-semibold mb-3 mt-5; }
+        .course-html-content p { @apply mb-3 leading-relaxed; }
+        .course-html-content ul { @apply list-disc list-inside mb-3 pl-4; }
+        .course-html-content li { @apply mb-1; }
+        .course-html-content strong { @apply font-semibold; }
+        .course-html-content code { @apply bg-muted text-muted-foreground px-1 py-0.5 rounded text-sm font-code; }
+      `}</style>
+    </div>
+  );
+}
+
+interface AdsTaskDisplayProps extends TaskDisplayProps {
+  task: AdsTask;
+}
+
+function AdsTaskDisplay({ task }: AdsTaskDisplayProps) {
+  const metadata = task.metadata;
+  return (
+    <div className="space-y-3">
+      <h3 className="text-2xl font-headline font-semibold">{metadata.caption}</h3>
+      <p className="font-body text-lg">{metadata.intro}</p>
+      <div className="aspect-video bg-muted rounded-lg flex items-center justify-center border border-border shadow-inner">
+        {/* Placeholder for actual video player */}
+        <PlayCircle className="w-16 h-16 text-muted-foreground" />
+        <span className="sr-only">Video placeholder for {metadata.video}</span>
+      </div>
+      <p data-ai-hint="video player" className="text-sm text-center text-muted-foreground font-body">Video content is a placeholder. Source: {metadata.video_source || 'N/A'}</p>
+      {metadata.faqs && metadata.faqs.length > 0 && (
+        <div className="mt-4">
+          <h4 className="font-semibold mb-1">FAQs:</h4>
+          <ul className="list-disc list-inside text-sm">
+            {metadata.faqs.map((faq, i) => <li key={i}>{faq}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface CodeTaskDisplayProps extends TaskDisplayProps {
+  task: CodeTask;
+}
+
+function CodeTaskDisplay({ task }: CodeTaskDisplayProps) {
+  const metadata = task.metadata;
+  const lang = metadata.code_language;
+  return (
+    <div className="space-y-3">
+      <h3 className="text-2xl font-headline font-semibold">{metadata.caption}</h3>
+      <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+        <CodeIcon className="w-4 h-4"/> 
+        <span>Language: {lang}</span>
+        <Star className="w-4 h-4 text-yellow-500"/>
+        <span>Difficulty: {metadata.difficulty}</span>
+      </div>
+      <p className="font-body text-lg" dangerouslySetInnerHTML={{ __html: metadata.problem }} />
+      <div className="bg-gray-900 text-gray-100 p-4 rounded-md shadow-md overflow-x-auto">
+        <pre><code className={`language-${lang} font-code`}>{metadata.precode[lang] || ''}</code></pre>
+      </div>
+      {metadata.hint && <p className="text-sm italic text-muted-foreground">Hint: {metadata.hint}</p>}
+    </div>
+  );
+}
+
+// --- Task Viewer Component ---
 interface TaskViewerProps {
   task: Task;
-  lesson: Lesson;
+  lesson: Lesson; // Keep lesson for context if needed by tasks or AI
   onQuizAnswer: (questionText: string, studentAnswerText: string, isCorrect: boolean) => void;
   quizFeedback: { question: string; studentAnswer: string; rewrittenQuestion: string | null } | null;
   isAILoading: boolean;
@@ -389,104 +551,42 @@ interface TaskViewerProps {
 }
 
 function TaskViewer({ task, lesson, onQuizAnswer, quizFeedback, isAILoading, clearQuizFeedback }: TaskViewerProps) {
-  const metadata = task.metadata;
-
   const renderTaskContent = () => {
     switch (task.task_type) {
       case 'html':
-        const htmlMeta = metadata as HtmlTaskMetadata;
-        const quizMeta = metadata as QuizTaskMetadata;
-        if (task.action === 'quiz' && quizMeta.questions && quizMeta.questions.length > 0) {
-          const currentQuestion = quizFeedback?.rewrittenQuestion || quizMeta.questions[0].text;
-          const originalQuestionText = quizMeta.questions[0].text;
-
-          return (
-            <div className="space-y-4">
-              <h3 className="text-xl font-headline font-semibold">{metadata.caption}</h3>
-              {quizFeedback && quizFeedback.rewrittenQuestion && (
-                <Card className="bg-yellow-50 border-yellow-300 shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="text-lg font-headline text-yellow-700 flex items-center">
-                      <Lightbulb className="mr-2 h-5 w-5" /> Here's a Hint!
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-sm text-yellow-600 mb-2 font-body">Your answer <code className="bg-yellow-100 p-1 rounded text-yellow-700">{quizFeedback.studentAnswer}</code> to "<span className="italic">{quizFeedback.question}</span>" was incorrect.</p>
-                    <p className="text-md font-body text-yellow-800">{quizFeedback.rewrittenQuestion}</p>
-                     <Button variant="ghost" size="sm" onClick={clearQuizFeedback} className="mt-2 text-yellow-700 hover:bg-yellow-100">
-                      <RotateCcw className="mr-1 h-3 w-3" /> Try Original Question Again
-                    </Button>
-                  </CardContent>
-                </Card>
-              )}
-              <p className="text-lg font-body">{currentQuestion}</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {quizMeta.questions[0].answers.map((answer, index) => (
-                  <Button
-                    key={index}
-                    variant="outline"
-                    size="lg"
-                    className="justify-start p-4 text-left h-auto whitespace-normal hover:bg-accent hover:text-accent-foreground transition-transform transform hover:scale-105"
-                    onClick={() => onQuizAnswer(originalQuestionText, answer.text, !!answer.correct)}
-                    disabled={isAILoading}
-                  >
-                    {isAILoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {answer.text}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          );
-        }
-        // For lecture or text
-        return (
-          <div>
-            <h3 className="text-2xl font-headline font-semibold mb-3">{htmlMeta.caption}</h3>
-            <div className="prose prose-lg max-w-none font-body course-html-content" dangerouslySetInnerHTML={{ __html: htmlMeta.problem }} />
-            <style jsx global>{`
-              .course-html-content h1 { @apply text-2xl font-headline font-semibold mb-4 mt-6 text-primary; }
-              .course-html-content h2 { @apply text-xl font-headline font-semibold mb-3 mt-5; }
-              .course-html-content p { @apply mb-3 leading-relaxed; }
-              .course-html-content ul { @apply list-disc list-inside mb-3 pl-4; }
-              .course-html-content li { @apply mb-1; }
-              .course-html-content strong { @apply font-semibold; }
-              .course-html-content code { @apply bg-muted text-muted-foreground px-1 py-0.5 rounded text-sm font-code; }
-            `}</style>
-          </div>
-        );
+        return <HtmlTaskDisplay 
+                  task={task} 
+                  onQuizAnswer={onQuizAnswer}
+                  quizFeedback={quizFeedback}
+                  isAILoading={isAILoading}
+                  clearQuizFeedback={clearQuizFeedback}
+                  metadata={task.metadata} 
+                />;
       case 'ads':
-        const adsMeta = metadata as AdsTaskMetadata;
-        return (
-          <div className="space-y-3">
-            <h3 className="text-2xl font-headline font-semibold">{adsMeta.caption}</h3>
-            <p className="font-body text-lg">{adsMeta.intro}</p>
-            <div className="aspect-video bg-muted rounded-lg flex items-center justify-center border border-border shadow-inner">
-              <PlayCircle className="w-16 h-16 text-muted-foreground" />
-              <span className="sr-only">Video placeholder for {adsMeta.video}</span>
-            </div>
-            <p data-ai-hint="video player" className="text-sm text-center text-muted-foreground font-body">Video content is a placeholder.</p>
-          </div>
-        );
+        return <AdsTaskDisplay task={task} metadata={task.metadata} />;
       case 'code':
-        const codeMeta = metadata as CodeTaskMetadata;
-        const lang = task.code_language || 'plaintext';
-        return (
-          <div className="space-y-3">
-            <h3 className="text-2xl font-headline font-semibold">{codeMeta.caption}</h3>
-            <p className="font-body text-lg" dangerouslySetInnerHTML={{ __html: codeMeta.problem }} />
-            <div className="bg-gray-900 text-gray-100 p-4 rounded-md shadow-md overflow-x-auto">
-              <pre><code className={`language-${lang} font-code`}>{codeMeta.precode[lang] || codeMeta.precode['py'] || ''}</code></pre>
-            </div>
-          </div>
-        );
+        return <CodeTaskDisplay task={task} metadata={task.metadata} />;
       default:
-        return <p className="font-body">Unsupported task type.</p>;
+        // This case should ideally not be reached if types are correct
+        const exhaustiveCheck: never = task; 
+        return <p className="font-body">Unsupported task type: {exhaustiveCheck}</p>;
     }
   };
 
   return (
     <Card className="shadow-xl">
-      <CardContent className="p-6">
+      <CardHeader className="pb-2">
+        {/* Display common metadata like tags or difficulty rating here if desired */}
+        {task.metadata.tag && task.metadata.tag.length > 0 && (
+          <div className="flex space-x-2 mb-2">
+            {task.metadata.tag.map(t => <Badge key={t} variant="secondary">{t}</Badge>)}
+          </div>
+        )}
+         <div className="flex items-center text-sm text-muted-foreground">
+          <Star className="w-4 h-4 mr-1 text-yellow-400" /> Difficulty: {task.metadata.difficulty}
+        </div>
+      </CardHeader>
+      <CardContent className="p-6 pt-2">
         {renderTaskContent()}
       </CardContent>
     </Card>
