@@ -1,53 +1,72 @@
 "use client";
 
-import React from 'react';
-import useCourseStore from '@/store/courseStore'; // Adjust path as necessary
-import { Lesson, Task, QuizQuestion, QuizAnswer } from '@/types/course'; // Adjust path as necessary
-import LessonHeaderDisplay from '@/components/course/LessonHeaderDisplay'; // Will be created
-import TaskViewer from '@/components/tasks/TaskViewer'; // Will be created
-import TaskNavigationControls from '@/components/course/TaskNavigationControls'; // Will be created
-import WelcomeMessage from '@/components/course/WelcomeMessage'; // Will be created
-import { useToast } from "@/hooks/use-toast"; // Adjust path as necessary
-import { rewriteQuizQuestion, RewriteQuizQuestionInput } from '@/ai/flows/rewrite-quiz-question'; // Adjust path
-import { CheckCircle2, XCircle, AlertCircle, Lock } from 'lucide-react'; // For toast icons
+import React, { useEffect } from 'react';
+import useCourseStore from '@/store/courseStore';
+import { QuizQuestion, QuizAnswer, Task, Lesson } from '@/types/course';
+import LessonHeaderDisplay from '@/components/course/LessonHeaderDisplay';
+import TaskViewer from '@/components/tasks/TaskViewer';
+import TaskNavigationControls from '@/components/course/TaskNavigationControls';
+import WelcomeMessage from '@/components/course/WelcomeMessage';
+import { useToast } from "@/hooks/use-toast";
+import { rewriteQuizQuestion, RewriteQuizQuestionInput } from '@/ai/flows/rewrite-quiz-question';
+import { CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react';
+import {
+    getSelectedLesson as getStoreSelectedLesson,
+    getCurrentTask as getStoreCurrentTask,
+    getCurrentTaskId as getStoreCurrentTaskId,
+    isTaskConsideredSolved as getIsTaskConsideredSolved,
+    SelectorStateContext
+} from '@/store/courseSelectors';
 
-// Props are now mostly derived from the store
 interface MainContentAreaProps {}
 
 export default function MainContentArea({}: MainContentAreaProps) {
+  // Select all necessary state pieces for this component and for passing to selectors
   const {
-    selectedLesson,
-    currentTask,
+    selectedModuleId,
+    selectedLessonId,
     selectedTaskIndex,
+    modules,
+    taskCompletionStatus,
     quizFeedback,
     isAILoading,
+    isLoadingLessonTasks, // New loading state
     setQuizFeedback,
     setIsAILoading,
     markTaskAsSolved,
     selectTask,
-    isTaskConsideredSolved,
-    // Actions for navigation will be handled by TaskNavigationControls or locally if simple
+    fetchLessonTasks, // Action to fetch tasks
   } = useCourseStore(state => ({
-    selectedLesson: state.selectedLesson(),
-    currentTask: state.currentTask(),
+    selectedModuleId: state.selectedModuleId,
+    selectedLessonId: state.selectedLessonId,
     selectedTaskIndex: state.selectedTaskIndex,
+    modules: state.modules,
+    taskCompletionStatus: state.taskCompletionStatus,
     quizFeedback: state.quizFeedback,
     isAILoading: state.isAILoading,
+    isLoadingLessonTasks: state.isLoadingLessonTasks,
     setQuizFeedback: state.setQuizFeedback,
     setIsAILoading: state.setIsAILoading,
     markTaskAsSolved: state.markTaskAsSolved,
     selectTask: state.selectTask,
-    isTaskConsideredSolved: state.isTaskConsideredSolved,
+    fetchLessonTasks: state.fetchLessonTasks,
   }));
 
   const { toast } = useToast();
 
-  const currentLesson = selectedLesson; // Alias for clarity
-  const task = currentTask; // Alias for clarity
+  // Prepare context for selectors
+  const selectorContext: SelectorStateContext = {
+    modules,
+    taskCompletionStatus,
+    selectedModuleId,
+    selectedLessonId,
+    selectedTaskIndex,
+  };
 
-  // Ensure these are correctly using store state/selectors
-  const currentTaskId = useCourseStore(state => state.currentTaskId());
-  const currentTaskIsSolved = currentTask && currentLesson ? isTaskConsideredSolved(currentLesson.lesson_id, selectedTaskIndex) : false;
+  const currentLesson = getStoreSelectedLesson(selectorContext) as Lesson | null; // Cast needed if StoreLesson != Lesson
+  const currentTask = getStoreCurrentTask(selectorContext) as Task | null; // Cast needed if StoreTask != Task
+  const currentTaskId = getStoreCurrentTaskId(selectorContext);
+  const currentTaskIsSolved = currentTask && currentLesson ? getIsTaskConsideredSolved(selectorContext, currentLesson.lesson_id, selectedTaskIndex) : false;
 
 
   const handleQuizAnswer = async (question: QuizQuestion, studentAnswer: QuizAnswer) => {
@@ -175,32 +194,73 @@ export default function MainContentArea({}: MainContentAreaProps) {
   };
 
   // Effect to mark lecture/ads tasks as solved when they become current
-  React.useEffect(() => {
-    if (currentLesson && task && (task.task_type === 'ads' || (task.task_type === 'html' && (task.action === 'lecture' || task.action === 'text')))) {
-      if (currentTaskId && !isTaskConsideredSolved(currentLesson.lesson_id, selectedTaskIndex)) {
+  useEffect(() => {
+    if (currentLesson && currentTask && (currentTask.task_type === 'ads' || (currentTask.task_type === 'html' && (currentTask.action === 'lecture' || currentTask.action === 'text')))) {
+      // Use the selector getIsTaskConsideredSolved for the check
+      const solved = getIsTaskConsideredSolved(selectorContext, currentLesson.lesson_id, selectedTaskIndex);
+      if (currentTaskId && !solved) {
           markTaskAsSolved(currentLesson.lesson_id, selectedTaskIndex);
       }
     }
-  }, [task, currentTaskId, markTaskAsSolved, isTaskConsideredSolved, currentLesson, selectedTaskIndex]);
+  }, [currentTask, currentTaskId, markTaskAsSolved, selectorContext, currentLesson, selectedTaskIndex]); // selectorContext includes dependencies
+
+  // Effect to fetch lesson tasks if a lesson is selected but its tasks are not loaded
+  useEffect(() => {
+    if (currentLesson && !currentLesson.tasksLoaded && selectedModuleId && isLoadingLessonTasks !== currentLesson.lesson_id) {
+      fetchLessonTasks(currentLesson.lesson_id, selectedModuleId);
+    }
+  }, [currentLesson, selectedModuleId, fetchLessonTasks, isLoadingLessonTasks]);
 
 
-  if (!currentLesson || !task) {
+  if (!selectedLessonId || !currentLesson) {
+    // If no lesson is selected, or lesson data is missing (e.g. still loading initial meta)
     return (
-      <main className="flex-1 ml-80 p-8 overflow-y-auto"> {/* Ensure ml-80 matches sidebar width */}
+      <main className="flex-1 ml-80 p-8 overflow-y-auto">
         <WelcomeMessage />
       </main>
     );
   }
 
+  if (isLoadingLessonTasks === selectedLessonId || (currentLesson && !currentLesson.tasksLoaded && !currentTask)) {
+    // If tasks for the current lesson are loading, or lesson is loaded but tasks array is not yet populated
+    return (
+      <main className="flex-1 ml-80 p-8 overflow-y-auto flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
+          <p>Loading tasks for {currentLesson?.lesson_title || 'lesson'}...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!currentTask) {
+     // If tasks are supposedly loaded, but currentTask is still null (e.g. empty tasks array, or bad index)
+    return (
+      <main className="flex-1 ml-80 p-8 overflow-y-auto">
+        <div className="max-w-4xl mx-auto">
+            <LessonHeaderDisplay lesson={currentLesson} />
+            <div className="p-4 text-center text-muted-foreground mt-6">
+                <p>No task available for this lesson, or tasks are still loading.</p>
+            </div>
+            <TaskNavigationControls
+              onPrevTask={handlePrevTask}
+              onNextTask={handleNextTask}
+              selectedTaskIndex={selectedTaskIndex}
+              totalTasks={currentLesson.tasks?.length || 0}
+              isCurrentTaskSolved={false} // No task to be solved
+            />
+        </div>
+      </main>
+    );
+  }
+
+
   return (
-    <main className="flex-1 ml-80 p-8 overflow-y-auto"> {/* Ensure ml-80 matches sidebar width */}
+    <main className="flex-1 ml-80 p-8 overflow-y-auto">
       <div className="max-w-4xl mx-auto">
         <LessonHeaderDisplay lesson={currentLesson} />
         <TaskViewer
-          // Props for TaskViewer will be simplified as it will also use the store for task-specific data
-          // For now, passing what's directly needed or was previously passed.
-          // This will be refined when TaskViewer and its children are created.
-          task={task}
+          task={currentTask}
           lessonId={currentLesson.lesson_id}
           taskIndex={selectedTaskIndex}
           onQuizAnswer={handleQuizAnswer}
@@ -208,13 +268,13 @@ export default function MainContentArea({}: MainContentAreaProps) {
           quizFeedback={quizFeedback}
           isAILoading={isAILoading}
           clearQuizFeedback={() => setQuizFeedback(null)}
-          markTaskAsSolved={() => markTaskAsSolved(currentLesson.lesson_id, selectedTaskIndex)} // Ensure args match
+          markTaskAsSolved={() => markTaskAsSolved(currentLesson.lesson_id, selectedTaskIndex)}
         />
         <TaskNavigationControls
           onPrevTask={handlePrevTask}
           onNextTask={handleNextTask}
           selectedTaskIndex={selectedTaskIndex}
-          totalTasks={currentLesson.tasks.length}
+          totalTasks={currentLesson.tasks?.length || 0} // Handle case where tasks might be undefined briefly
           isCurrentTaskSolved={currentTaskIsSolved}
         />
       </div>

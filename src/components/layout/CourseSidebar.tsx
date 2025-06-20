@@ -1,44 +1,67 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { GraduationCap, ChevronDown, ChevronRight, Lock, CheckCircle2, PlayCircle, Unlock } from 'lucide-react';
-import { Module, Lesson } from '@/types/course'; // Adjust path as necessary
-import useCourseStore from '@/store/courseStore'; // Adjust path as necessary
-import { useToast } from "@/hooks/use-toast"; // Adjust path as necessary
+import { GraduationCap, ChevronDown, ChevronRight, Lock, CheckCircle2, PlayCircle, Unlock, Loader2 } from 'lucide-react';
+import { Module as FullModuleType, Lesson as FullLessonType } from '@/types/course'; // Original full types
+import useCourseStore from '@/store/courseStore';
+import { useToast } from "@/hooks/use-toast";
+import {
+  isLessonUnlocked as getIsLessonUnlocked,
+  isLessonComplete as getIsLessonComplete,
+  isModuleUnlocked as getIsModuleUnlocked,
+  SelectorStateContext // Type for state passed to selectors
+} from '@/store/courseSelectors';
+
+// Reflecting the store's new structure for modules and lessons
+interface SidebarModule extends Omit<FullModuleType, 'lessons' | 'description' | 'what_students_will_build' | 'concepts_learned'> {
+  lessons?: SidebarLesson[];
+  lessonsLoaded?: boolean;
+  // Add back other module fields if they are part of the course-meta.json and needed for display
+  aim?: string;
+  description?: string;
+}
+
+interface SidebarLesson extends Omit<FullLessonType, 'tasks' | 'description' | 'what_students_will_build' | 'concepts_learned'> {
+  tasks?: Task[]; // Task type from '@/types/course'
+  tasksLoaded?: boolean;
+   aim: string; // Ensure aim is part of SidebarLesson if it's used by LessonItem or selectors
+}
+// Temporary Task type placeholder if not importing full Task type
+type Task = any;
+
 
 interface CourseSidebarProps {
   courseName: string;
-  // Modules will be fetched from the store
 }
 
 interface ModuleAccordionProps {
-  module: Module;
-  // selectedLessonId, onLessonClick, isActiveModule, isModuleUnlocked,
-  // isLessonUnlocked, isLessonComplete, selectedModuleId will be from store or derived
+  module: SidebarModule;
 }
 
 interface LessonItemProps {
-  lesson: Lesson;
-  moduleId: number; // Pass moduleId to handle lesson click correctly
-  // onClick, isActive, isUnlocked, isComplete will be from store or derived
+  lesson: SidebarLesson;
+  moduleId: number;
 }
 
 function LessonItem({ lesson, moduleId }: LessonItemProps) {
   const {
     selectedLessonId,
-    selectLesson,
-    isLessonUnlocked: isStoreLessonUnlocked, // Renaming to avoid conflict if passed as prop
-    isLessonComplete: isStoreLessonComplete
+    selectLesson: storeSelectLesson,
+    modules, // Full modules array from store for context
+    taskCompletionStatus
   } = useCourseStore(state => ({
     selectedLessonId: state.selectedLessonId,
     selectLesson: state.selectLesson,
-    isLessonUnlocked: state.isLessonUnlocked,
-    isLessonComplete: state.isLessonComplete,
+    modules: state.modules,
+    taskCompletionStatus: state.taskCompletionStatus,
   }));
 
+  // Prepare state for selectors
+  const selectorContext: SelectorStateContext = { modules, taskCompletionStatus, selectedLessonId };
+
   const isActive = selectedLessonId === lesson.lesson_id;
-  const isUnlocked = isStoreLessonUnlocked(lesson.lesson_id, moduleId);
-  const isComplete = isStoreLessonComplete(lesson.lesson_id);
+  const isUnlocked = getIsLessonUnlocked(selectorContext, lesson.lesson_id, moduleId);
+  const isComplete = getIsLessonComplete(selectorContext, lesson.lesson_id);
 
   const { toast } = useToast();
 
@@ -56,7 +79,11 @@ function LessonItem({ lesson, moduleId }: LessonItemProps) {
       });
       return;
     }
-    selectLesson(lesson.lesson_id, moduleId);
+    storeSelectLesson(lesson.lesson_id, moduleId); // Calls the store action
+    // Task fetching is now handled by the selectLesson action in the store
+    // if (!lesson.tasksLoaded) {
+    //   fetchLessonTasks(lesson.lesson_id, moduleId);
+    // }
   };
 
   let icon = null;
@@ -95,50 +122,74 @@ function LessonItem({ lesson, moduleId }: LessonItemProps) {
 function ModuleAccordion({ module }: ModuleAccordionProps) {
   const {
     selectedModuleId,
-    isModuleUnlocked: isStoreModuleUnlocked,
-    // selectModule, // Not directly selecting module here, but could be added
-   } = useCourseStore(state => ({
+    modules: storeModules, // Renamed to avoid conflict with 'module' prop
+    taskCompletionStatus,
+    fetchModuleLessons,
+    isLoadingModuleLessons,
+    selectModule: storeSelectModule // Renamed to avoid conflict
+  } = useCourseStore(state => ({
     selectedModuleId: state.selectedModuleId,
-    isModuleUnlocked: state.isModuleUnlocked,
-    // selectModule: state.selectModule, // If needed for other interactions
+    modules: state.modules,
+    taskCompletionStatus: state.taskCompletionStatus,
+    fetchModuleLessons: state.fetchModuleLessons,
+    isLoadingModuleLessons: state.isLoadingModuleLessons,
+    selectModule: state.selectModule,
   }));
 
+  // Prepare state for selectors
+  const selectorContext: SelectorStateContext = { modules: storeModules, taskCompletionStatus, selectedModuleId };
+
   const isActiveModule = selectedModuleId === module.module_id;
-  const isModuleUnlocked = isStoreModuleUnlocked(module.module_id);
+  const isModuleUnlocked = getIsModuleUnlocked(selectorContext, module.module_id);
   const [isOpen, setIsOpen] = useState(isActiveModule && isModuleUnlocked);
   const { toast } = useToast();
 
   useEffect(() => {
     if (isModuleUnlocked) {
-        setIsOpen(prevOpenState => (isActiveModule ? true : prevOpenState));
+      setIsOpen(prevOpen => (isActiveModule ? true : prevOpen));
+      if (isActiveModule && !module.lessonsLoaded && !isLoadingModuleLessons) {
+         // This logic might be better placed in the toggleOpen or a dedicated "onExpand" handler
+         // if fetchModuleLessons should only be called on explicit user interaction to open.
+         // For now, if active and lessons not loaded, try fetching.
+         // The store's selectModule action now also triggers fetchModuleLessons.
+      }
     } else {
-        setIsOpen(false);
+      setIsOpen(false);
     }
-  }, [isActiveModule, isModuleUnlocked]);
+  }, [isActiveModule, isModuleUnlocked, module.lessonsLoaded, isLoadingModuleLessons, fetchModuleLessons, module.module_id]);
 
-  const toggleOpen = () => {
+  const handleAccordionToggle = () => {
     if (!isModuleUnlocked) {
       toast({
-        title: (
-          <div className="flex items-center">
-            <Lock className="h-5 w-5 mr-2" />
-            <span>Module Locked</span>
-          </div>
-        ),
+        title: <div className="flex items-center"><Lock className="h-5 w-5 mr-2" /><span>Module Locked</span></div>,
         description: "Complete the previous module to unlock this one.",
         variant: "destructive",
       });
       return;
     }
+
+    // If opening the accordion and lessons aren't loaded and not currently loading
+    if (!isOpen && !module.lessonsLoaded && isLoadingModuleLessons !== module.module_id) {
+      fetchModuleLessons(module.module_id);
+    }
+    // If the module is not active, selecting it will also handle fetching lessons.
+    // This ensures that clicking the accordion header to open it OR to select the module
+    // results in lessons being loaded.
+    if (!isActiveModule) {
+        storeSelectModule(module.module_id); // This action in store now handles fetching lessons.
+    }
+
     setIsOpen(!isOpen);
   };
+
+  const lessons = module.lessons || [];
 
   return (
     <div className={`rounded-md border border-border shadow-sm transition-all duration-300 ease-in-out ${!isModuleUnlocked ? 'opacity-70 bg-muted/30' : ''}`}>
       <button
-        onClick={toggleOpen}
+        onClick={handleAccordionToggle}
         aria-expanded={isOpen && isModuleUnlocked}
-        disabled={!isModuleUnlocked && !isActiveModule}
+        disabled={!isModuleUnlocked && !isActiveModule && !isOpen} // Allow clicking an active module to close it
         className={`w-full flex items-center justify-between p-4 text-left font-headline font-medium text-lg
                     ${isModuleUnlocked ? 'hover:bg-accent transition-colors duration-200' : 'cursor-not-allowed'} rounded-t-md`}
         aria-controls={`module-${module.module_id}-content`}
@@ -149,20 +200,30 @@ function ModuleAccordion({ module }: ModuleAccordionProps) {
         </span>
         {isModuleUnlocked && (isOpen ? <ChevronDown className="h-5 w-5 text-primary" /> : <ChevronRight className="h-5 w-5 text-muted-foreground" />)}
       </button>
-      {isModuleUnlocked && (
+      {isModuleUnlocked && isOpen && (
         <div
           id={`module-${module.module_id}-content`}
-          className={`overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px]' : 'max-h-0'}`}
+          className={`overflow-hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[1000px]' : 'max-h-0'}`} // max-h should be controlled by isOpen
         >
-          <ul className="p-2 space-y-1 bg-background rounded-b-md">
-            {module.lessons.map(lesson => (
-              <LessonItem
-                key={lesson.lesson_id}
-                lesson={lesson}
-                moduleId={module.module_id} // Pass moduleId
-              />
-            ))}
-          </ul>
+          {isLoadingModuleLessons === module.module_id && (
+            <div className="p-4 text-center flex items-center justify-center text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading lessons...
+            </div>
+          )}
+          {module.lessonsLoaded && lessons.length === 0 && !isLoadingModuleLessons && (
+             <div className="p-4 text-center text-muted-foreground">No lessons in this module.</div>
+          )}
+          {module.lessonsLoaded && lessons.length > 0 && (
+            <ul className="p-2 space-y-1 bg-background rounded-b-md">
+              {lessons.map(lesson => (
+                <LessonItem
+                  key={lesson.lesson_id}
+                  lesson={lesson}
+                  moduleId={module.module_id}
+                />
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
@@ -170,7 +231,8 @@ function ModuleAccordion({ module }: ModuleAccordionProps) {
 }
 
 export default function CourseSidebar({ courseName }: CourseSidebarProps) {
-  const modules = useCourseStore(state => state.courseData.modules);
+  // Now directly use `modules` from the store, which are of type `StoreModule[]`
+  const modules = useCourseStore(state => state.modules);
 
   return (
     <aside className="w-80 fixed top-0 left-0 h-full bg-card border-r border-border shadow-md flex flex-col overflow-y-auto">

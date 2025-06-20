@@ -1,39 +1,51 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import useCourseStore from '@/store/courseStore'; // Adjust path
 import CourseSidebar from '@/components/layout/CourseSidebar'; // Adjust path
 import MainContentArea from '@/components/layout/MainContentArea'; // Adjust path
-import { Course, Lesson, Task, QuizQuestion, QuizAnswer } // Assuming these types are now in @/types/course
-from '@/types/course'; // Adjust path
+// Types might not be needed directly here anymore if components handle their own data fetching from store
 
-// The main app component, now much leaner
 function CoursePilotApp() {
-  // Fetch initial static data or data that doesn't change often directly from store if needed
-  // For example, the course name.
-  const courseName = useCourseStore(state => state.courseData.course_name);
-  
-  // Most of the state and logic is now within individual components or the Zustand store.
-  // MainContentArea and CourseSidebar will subscribe to the store for their respective needs.
+  const fetchCourseMeta = useCourseStore(state => state.fetchCourseMeta);
+  const courseName = useCourseStore(state => state.courseName);
+  const isLoadingCourseMeta = useCourseStore(state => state.isLoadingCourseMeta);
+  const modules = useCourseStore(state => state.modules);
 
-  // Example of how one might still need top-level state or effects,
-  // though in this refactor, most has been pushed down or into the store.
-  // useEffect(() => {
-  //   // Perform any initial setup that might depend on store being ready,
-  //   // or dispatch initial actions if not handled in store initialization.
-  //   // For instance, loading course data if it were async:
-  //   // useCourseStore.getState().loadCourseData();
-  // }, []);
+  useEffect(() => {
+    fetchCourseMeta();
+  }, [fetchCourseMeta]);
+
+  if (isLoadingCourseMeta && !courseName) {
+    return (
+      <div className="flex h-screen bg-background text-foreground items-center justify-center">
+        <div>Loading Course Information...</div> {/* Replace with a proper loader/skeleton */}
+      </div>
+    );
+  }
+  
+  if (!courseName && !isLoadingCourseMeta && modules.length === 0) {
+    return (
+       <div className="flex h-screen bg-background text-foreground items-center justify-center">
+        <div>Failed to load course. Please try refreshing.</div>
+      </div>
+    )
+  }
+
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <CourseSidebar courseName={courseName} />
-      <MainContentArea /> {/* MainContentArea now fetches its own data from the store */}
+      {/* Pass courseName directly, or let CourseSidebar fetch it if preferred */}
+      <CourseSidebar courseName={courseName || "Loading..."} />
+      <MainContentArea />
     </div>
   );
 }
 
-// The page component that renders the main application
 export default function CoursePilotPage() {
+  // This component itself is a server component by default in App Router.
+  // To use hooks like useEffect, CoursePilotApp needs to be a client component,
+  // or this page needs to be marked "use client" if CoursePilotApp is directly exported.
+  // Assuming CoursePilotApp is intended to be a client component as it uses hooks.
   return <CoursePilotApp />;
 }
