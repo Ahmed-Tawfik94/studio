@@ -11,12 +11,14 @@ import { useToast } from "@/hooks/use-toast";
 import { rewriteQuizQuestion, RewriteQuizQuestionInput } from '@/ai/flows/rewrite-quiz-question';
 import { CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react';
 import {
-    getSelectedLesson as getStoreSelectedLesson,
-    getCurrentTask as getStoreCurrentTask,
-    getCurrentTaskId as getStoreCurrentTaskId,
-    isTaskConsideredSolved as getIsTaskConsideredSolved,
-    SelectorStateContext
-} from '@/store/courseSelectors';
+    // These imports are no longer needed as courseSelectors is part of courseStore import
+    // getSelectedLesson as getStoreSelectedLesson,
+    // getCurrentTask as getStoreCurrentTask,
+    // getCurrentTaskId as getStoreCurrentTaskId,
+    // isTaskConsideredSolved as getIsTaskConsideredSolved,
+    // SelectorStateContext
+} from '@/store/courseSelectors'; // This import will be removed
+import useCourseStore, { courseSelectors, CourseState } from '@/store/courseStore'; // Added courseSelectors and CourseState
 
 interface MainContentAreaProps {}
 
@@ -54,19 +56,15 @@ export default function MainContentArea({}: MainContentAreaProps) {
 
   const { toast } = useToast();
 
-  // Prepare context for selectors
-  const selectorContext: SelectorStateContext = {
-    modules,
-    taskCompletionStatus,
-    selectedModuleId,
-    selectedLessonId,
-    selectedTaskIndex,
-  };
+  // Use selectors directly from the store, passing the full state
+  const currentLesson = useCourseStore(courseSelectors.selectedLesson) as Lesson | null; // Cast might still be needed if StoreLesson type from store differs from imported Lesson type
+  const currentTask = useCourseStore(courseSelectors.currentTask) as Task | null; // Cast might still be needed
+  const currentTaskId = useCourseStore(courseSelectors.currentTaskId);
 
-  const currentLesson = getStoreSelectedLesson(selectorContext) as Lesson | null; // Cast needed if StoreLesson != Lesson
-  const currentTask = getStoreCurrentTask(selectorContext) as Task | null; // Cast needed if StoreTask != Task
-  const currentTaskId = getStoreCurrentTaskId(selectorContext);
-  const currentTaskIsSolved = currentTask && currentLesson ? getIsTaskConsideredSolved(selectorContext, currentLesson.lesson_id, selectedTaskIndex) : false;
+  // For selectors that take parameters, we need to pass the state
+  const currentTaskIsSolved = useCourseStore(state =>
+    currentTask && currentLesson ? courseSelectors.isTaskConsideredSolved(state, currentLesson.lesson_id, selectedTaskIndex) : false
+  );
 
 
   const handleQuizAnswer = async (question: QuizQuestion, studentAnswer: QuizAnswer) => {
@@ -196,13 +194,17 @@ export default function MainContentArea({}: MainContentAreaProps) {
   // Effect to mark lecture/ads tasks as solved when they become current
   useEffect(() => {
     if (currentLesson && currentTask && (currentTask.task_type === 'ads' || (currentTask.task_type === 'html' && (currentTask.action === 'lecture' || currentTask.action === 'text')))) {
-      // Use the selector getIsTaskConsideredSolved for the check
-      const solved = getIsTaskConsideredSolved(selectorContext, currentLesson.lesson_id, selectedTaskIndex);
+      // Re-evaluate 'solved' inside useEffect with fresh state if necessary, or ensure selectorContext is stable if used from outside
+      const isSolved = useCourseStore.getState(); // Get fresh state
+      const solved = courseSelectors.isTaskConsideredSolved(isSolved, currentLesson.lesson_id, selectedTaskIndex);
       if (currentTaskId && !solved) {
           markTaskAsSolved(currentLesson.lesson_id, selectedTaskIndex);
       }
     }
-  }, [currentTask, currentTaskId, markTaskAsSolved, selectorContext, currentLesson, selectedTaskIndex]); // selectorContext includes dependencies
+  // Dependencies need to be carefully managed. If selectorContext was used, its stability is key.
+  // Now, explicitly list dependencies. selectedTaskIndex, currentLesson.lesson_id, currentTaskId, markTaskAsSolved, currentTask
+  }, [currentTask, currentLesson?.lesson_id, selectedTaskIndex, currentTaskId, markTaskAsSolved]);
+  // Note: currentLesson itself can be a dependency if its properties are accessed directly.
 
   // Effect to fetch lesson tasks if a lesson is selected but its tasks are not loaded
   useEffect(() => {
